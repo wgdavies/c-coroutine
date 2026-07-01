@@ -8,7 +8,7 @@ native](https://www.chiark.greenend.org.uk/~sgtatham/quasiblog/coroutines-c++20/
 philosophy](https://www.chiark.greenend.org.uk/~sgtatham/quasiblog/coroutines-philosophy/)
 \]
 
-[]{#intro}
+<span id="intro"></span>
 
 ## Introduction
 
@@ -20,23 +20,47 @@ should be the caller and which should be the callee?
 Here is a very simple piece of run-length decompression code, and an
 equally simple piece of parser code:
 
-+:----------------------------------+:--------------------------------------+
-|         /* Decompression code */  |         /* Parser code */             |
-|         while (1) {               |         while (1) {                   |
-|             c = getchar();        |             c = getchar();            |
-|             if (c == EOF)         |             if (c == EOF)             |
-|                 break;            |                 break;                |
-|             if (c == 0xFF) {      |             if (isalpha(c)) {         |
-|                 len = getchar();  |                 do {                  |
-|                 c = getchar();    |                     add_to_token(c);  |
-|                 while (len--)     |                     c = getchar();    |
-|                     emit(c);      |                 } while (isalpha(c)); |
-|             } else                |                 got_token(WORD);      |
-|                 emit(c);          |             }                         |
-|         }                         |             add_to_token(c);          |
-|         emit(EOF);                |             got_token(PUNCT);         |
-|                                   |         }                             |
-+-----------------------------------+---------------------------------------+
+<table width="100%" data-border="0">
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;" data-valign="top"
+width="50%"><pre><code>    /* Decompression code */
+    while (1) {
+        c = getchar();
+        if (c == EOF)
+            break;
+        if (c == 0xFF) {
+            len = getchar();
+            c = getchar();
+            while (len--)
+                emit(c);
+        } else
+            emit(c);
+    }
+    emit(EOF);</code></pre></td>
+<td style="text-align: left;" data-valign="top"
+width="50%"><pre><code>    /* Parser code */
+    while (1) {
+        c = getchar();
+        if (c == EOF)
+            break;
+        if (isalpha(c)) {
+            do {
+                add_to_token(c);
+                c = getchar();
+            } while (isalpha(c));
+            got_token(WORD);
+        }
+        add_to_token(c);
+        got_token(PUNCT);
+    }</code></pre></td>
+</tr>
+</tbody>
+</table>
 
 Each of these code fragments is very simple, and easy to read and
 understand. One produces a character at a time by calling `emit()`; the
@@ -50,50 +74,76 @@ In many modern operating systems, you could do this using pipes between
 two processes or two threads. `emit()` in the decompressor writes to a
 pipe, and `getchar()` in the parser reads from the other end of the same
 pipe. Simple and robust, but also heavyweight and not portable.
-Typically you don\'t want to have to divide your program into threads
-for a task this simple.
+Typically you don't want to have to divide your program into threads for
+a task this simple.
 
 In this article I offer a creative solution to this sort of structure
 problem.
 
-[]{#rewrite}
+<span id="rewrite"></span>
 
 ## Rewriting
 
 The conventional answer is to rewrite one of the ends of the
-communication channel so that it\'s a function that can be called.
-Here\'s an example of what that might mean for each of the example
-fragments.
+communication channel so that it's a function that can be called. Here's
+an example of what that might mean for each of the example fragments.
 
-+:----------------------------------+:----------------------------------+
-|     int decompressor(void) {      |     void parser(int c) {          |
-|         static int repchar;       |         static enum {             |
-|         static int replen;        |             START, IN_WORD        |
-|         if (replen > 0) {         |         } state;                  |
-|             replen--;             |         switch (state) {          |
-|             return repchar;       |             case IN_WORD:         |
-|         }                         |             if (isalpha(c)) {     |
-|         c = getchar();            |                 add_to_token(c);  |
-|         if (c == EOF)             |                 return;           |
-|             return EOF;           |             }                     |
-|         if (c == 0xFF) {          |             got_token(WORD);      |
-|             replen = getchar();   |             state = START;        |
-|             repchar = getchar();  |             /* fall through */    |
-|             replen--;             |                                   |
-|             return repchar;       |             case START:           |
-|         } else                    |             add_to_token(c);      |
-|             return c;             |             if (isalpha(c))       |
-|     }                             |                 state = IN_WORD;  |
-|                                   |             else                  |
-|                                   |                 got_token(PUNCT); |
-|                                   |             break;                |
-|                                   |         }                         |
-|                                   |     }                             |
-+-----------------------------------+-----------------------------------+
+<table width="100%" data-border="0">
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;" data-valign="top"
+width="50%"><pre><code>int decompressor(void) {
+    static int repchar;
+    static int replen;
+    if (replen &gt; 0) {
+        replen--;
+        return repchar;
+    }
+    c = getchar();
+    if (c == EOF)
+        return EOF;
+    if (c == 0xFF) {
+        replen = getchar();
+        repchar = getchar();
+        replen--;
+        return repchar;
+    } else
+        return c;
+}</code></pre></td>
+<td style="text-align: left;" data-valign="top"
+width="50%"><pre><code>void parser(int c) {
+    static enum {
+        START, IN_WORD
+    } state;
+    switch (state) {
+        case IN_WORD:
+        if (isalpha(c)) {
+            add_to_token(c);
+            return;
+        }
+        got_token(WORD);
+        state = START;
+        /* fall through */
+&#10;        case START:
+        add_to_token(c);
+        if (isalpha(c))
+            state = IN_WORD;
+        else
+            got_token(PUNCT);
+        break;
+    }
+}</code></pre></td>
+</tr>
+</tbody>
+</table>
 
-Of course you don\'t have to rewrite both of them; just one will do. If
+Of course you don't have to rewrite both of them; just one will do. If
 you rewrite the decompressor in the form shown, so that it returns one
-character every time it\'s called, then the original parser code can
+character every time it's called, then the original parser code can
 replace calls to `getchar()` with calls to `decompressor()`, and the
 program will be happy. Conversely, if you rewrite the parser in the form
 shown, so that it is called once for every input character, then the
@@ -101,24 +151,24 @@ original decompression code can call `parser()` instead of `emit()` with
 no problems. You would only want to rewrite *both* functions as callees
 if you were a glutton for punishment.
 
-And that\'s the point, really. Both these rewritten functions are
+And that's the point, really. Both these rewritten functions are
 thoroughly ugly compared to their originals. Both of the processes
 taking place here are easier to read when written as a caller, not as a
 callee. Try to deduce the grammar recognised by the parser, or the
 compressed data format understood by the decompressor, just by reading
 the code, and you will find that both the originals are clear and both
-the rewritten forms are less clear. It would be much nicer if we didn\'t
-have to turn either piece of code inside out. []{#knuth}
+the rewritten forms are less clear. It would be much nicer if we didn't
+have to turn either piece of code inside out. <span id="knuth"></span>
 
-## Knuth\'s coroutines
+## Knuth's coroutines
 
 In The Art of Computer Programming, Donald Knuth presents a solution to
 this sort of problem. His answer is to throw away the stack concept
 completely. Stop thinking of one process as the caller and the other as
 the callee, and start thinking of them as cooperating equals.
 
-In practical terms: replace the traditional \"call\" primitive with a
-slightly different one. The new \"call\" will save the return value
+In practical terms: replace the traditional "call" primitive with a
+slightly different one. The new "call" will save the return value
 somewhere other than on the stack, and will then jump to a location
 specified in another saved return value. So each time the decompressor
 emits another character, it saves its program counter and jumps to the
@@ -133,19 +183,19 @@ the coroutine call primitive. Languages like C depend utterly on their
 stack-based structure, so whenever control passes from any function to
 any other, one must be the caller and the other must be the callee. So
 if you want to write portable code, this technique is at least as
-impractical as the Unix pipe solution. []{#knuth}
+impractical as the Unix pipe solution. <span id="knuth"></span>
 
 ## Stack-based coroutines
 
-So what we would *really* like is the ability to mimic Knuth\'s
-coroutine call primitive in C. We must accept that in reality, at the C
-level, one function will be caller and the other will be callee. In the
-caller, we have no problem; we code the original algorithm, pretty much
-exactly as written, and whenever it has (or needs) a character it calls
-the other function.
+So what we would *really* like is the ability to mimic Knuth's coroutine
+call primitive in C. We must accept that in reality, at the C level, one
+function will be caller and the other will be callee. In the caller, we
+have no problem; we code the original algorithm, pretty much exactly as
+written, and whenever it has (or needs) a character it calls the other
+function.
 
 The callee has all the problems. For our callee, we want a function
-which has a \"return and continue\" operation: return from the function,
+which has a "return and continue" operation: return from the function,
 and next time it is called, resume control from just after the *return*
 statement. For example, we would like to be able to write a function
 that says
@@ -185,17 +235,17 @@ next. Before any return, we update the state variable to point at the
 right label; after any call, we do a `switch` on the value of the
 variable to find out where to jump to.
 
-It\'s still ugly, though. The worst part of it is that the set of labels
+It's still ugly, though. The worst part of it is that the set of labels
 must be maintained manually, and must be consistent between the function
 body and the initial `switch` statement. Every time we add a new return
 statement, we must invent a new label name and add it to the list in the
 `switch`; every time we remove a return statement, we must remove its
-corresponding label. We\'ve just increased our maintenance workload by a
-factor of two. []{#duff}
+corresponding label. We've just increased our maintenance workload by a
+factor of two. <span id="duff"></span>
 
-## Duff\'s device
+## Duff's device
 
-The famous \"Duff\'s device\" in C makes use of the fact that a `case`
+The famous "Duff's device" in C makes use of the fact that a `case`
 statement is still legal within a sub-block of its matching `switch`
 statement. Tom Duff used this for an optimised output loop:
 
@@ -270,34 +320,62 @@ rewrite `crReturn` as
 
 and then we no longer have to worry about those state parameters at all,
 provided we obey a fourth ground rule (never put two `crReturn`
-statements on the same line). []{#evaluation}
+statements on the same line). <span id="evaluation"></span>
 
 ## Evaluation
 
-So now we have this monstrosity, let\'s rewrite our original code
+So now we have this monstrosity, let's rewrite our original code
 fragments using it.
 
-+:----------------------------------+:------------------------------------------+
-|     int decompressor(void) {      |     void parser(int c) {                  |
-|         static int c, len;        |         crBegin;                          |
-|         crBegin;                  |         while (1) {                       |
-|         while (1) {               |             /* first char already in c */ |
-|             c = getchar();        |             if (c == EOF)                 |
-|             if (c == EOF)         |                 break;                    |
-|                 break;            |             if (isalpha(c)) {             |
-|             if (c == 0xFF) {      |                 do {                      |
-|                 len = getchar();  |                     add_to_token(c);      |
-|                 c = getchar();    |             crReturn( );                  |
-|                 while (len--)     |                 } while (isalpha(c));     |
-|                 crReturn(c);      |                 got_token(WORD);          |
-|             } else                |             }                             |
-|             crReturn(c);          |             add_to_token(c);              |
-|         }                         |             got_token(PUNCT);             |
-|         crReturn(EOF);            |         crReturn( );                      |
-|         crFinish;                 |         }                                 |
-|     }                             |         crFinish;                         |
-|                                   |     }                                     |
-+-----------------------------------+-------------------------------------------+
+<table width="100%" data-border="0">
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;" data-valign="top"
+width="50%"><pre><code>int decompressor(void) {
+    static int c, len;
+    crBegin;
+    while (1) {
+        c = getchar();
+        if (c == EOF)
+            break;
+        if (c == 0xFF) {
+            len = getchar();
+            c = getchar();
+            while (len--)
+            crReturn(c);
+        } else
+        crReturn(c);
+    }
+    crReturn(EOF);
+    crFinish;
+}</code></pre></td>
+<td style="text-align: left;" data-valign="top"
+width="50%"><pre><code>void parser(int c) {
+    crBegin;
+    while (1) {
+        /* first char already in c */
+        if (c == EOF)
+            break;
+        if (isalpha(c)) {
+            do {
+                add_to_token(c);
+        crReturn( );
+            } while (isalpha(c));
+            got_token(WORD);
+        }
+        add_to_token(c);
+        got_token(PUNCT);
+    crReturn( );
+    }
+    crFinish;
+}</code></pre></td>
+</tr>
+</tbody>
+</table>
 
 We have rewritten both decompressor and parser as callees, with no need
 at all for the massive restructuring we had to do last time we did this.
@@ -317,30 +395,30 @@ now has its `getchar()` (well, the corresponding `crReturn`) at the end
 of the loop instead of the start, because the first character is already
 in `c` when the function is entered. We could accept this small change
 in structure, or if we really felt strongly about it we could specify
-that `parser()` required an \"initialisation\" call before you could
-start feeding it characters.
+that `parser()` required an "initialisation" call before you could start
+feeding it characters.
 
-As before, of course, we don\'t have to rewrite both routines using the
+As before, of course, we don't have to rewrite both routines using the
 coroutine macros. One will suffice; the other can be its caller.
 
 We have achieved what we set out to achieve: a portable ANSI C means of
 passing data between a producer and a consumer without the need to
 rewrite one as an explicit state machine. We have done this by combining
 the C preprocessor with a little-used feature of the `switch` statement
-to create an *implicit* state machine. []{#standards}
+to create an *implicit* state machine. <span id="standards"></span>
 
 ## Coding Standards
 
 Of course, this trick violates every coding standard in the book. Try
-doing this in your company\'s code and you will probably be subject to a
+doing this in your company's code and you will probably be subject to a
 stern telling off if not disciplinary action! You have embedded
 unmatched braces in macros, used `case` within sub-blocks, and as for
 the `crReturn` macro with its terrifyingly disruptive contents . . .
-It\'s a wonder you haven\'t been fired on the spot for such
-irresponsible coding practice. You should be ashamed of yourself.
+It's a wonder you haven't been fired on the spot for such irresponsible
+coding practice. You should be ashamed of yourself.
 
 I would claim that the coding standards are at fault here. The examples
-I\'ve shown in this article are not very long, not very complicated, and
+I've shown in this article are not very long, not very complicated, and
 still just about comprehensible when rewritten as state machines. But as
 the functions get longer, the degree of rewriting required becomes
 greater and the loss of clarity becomes much, much worse.
@@ -367,7 +445,7 @@ just as loudly for building a function out of small blocks connected by
 a function like that obscures the structure of the algorithm horribly.
 
 Coding standards aim for clarity. By hiding vital things like `switch`,
-`return` and `case` statements inside \"obfuscating\" macros, the coding
+`return` and `case` statements inside "obfuscating" macros, the coding
 standards would claim you have obscured the syntactic structure of the
 program, and violated the requirement for clarity. But you have done so
 in the cause of revealing the *algorithmic* structure of the program,
@@ -376,7 +454,7 @@ which is far more likely to be what the reader wants to know!
 Any coding standard which insists on syntactic clarity at the expense of
 algorithmic clarity should be rewritten. If your employer fires you for
 using this trick, tell them that repeatedly as the security staff drag
-you out of the building. []{#code}
+you out of the building. <span id="code"></span>
 
 ## Refinements and Code
 
@@ -391,13 +469,13 @@ This is easily enough done. We arrange an extra function parameter,
 which is a pointer to a context structure; we declare all our local
 state, and our coroutine state variable, as elements of that structure.
 
-It\'s a little bit ugly, because suddenly you have to use `ctx->i` as a
+It's a little bit ugly, because suddenly you have to use `ctx->i` as a
 loop counter where you would previously just have used `i`; virtually
 all your serious variables become elements of the coroutine context
 structure. But it removes the problems with re-entrancy, and still
-hasn\'t impacted the *structure* of the routine.
+hasn't impacted the *structure* of the routine.
 
-(Of course, if C only had Pascal\'s `with` statement, we could arrange
+(Of course, if C only had Pascal's `with` statement, we could arrange
 for the macros to make this layer of indirection truly transparent as
 well. A pity. Still, at least C++ users can manage this by having their
 coroutine be a class member, and keeping all its local variables in the
@@ -410,36 +488,36 @@ the technique, for when you can get away with using `static` variables;
 the `ccr` macros provide the advanced re-entrant form. Full
 documentation is given in a comment in the header file itself.
 
-Note that Visual C++ version 6 doesn\'t like this coroutine trick,
+Note that Visual C++ version 6 doesn't like this coroutine trick,
 because its default debug state (Program Database for Edit and Continue)
 does something strange to the `__LINE__` macro. To compile a
 coroutine-using program with VC++ 6, you must turn off Edit and
-Continue. (In the project settings, go to the \"C/C++\" tab, category
-\"General\", setting \"Debug info\". Select any option *other* than
-\"Program Database for Edit and Continue\".)
+Continue. (In the project settings, go to the "C/C++" tab, category
+"General", setting "Debug info". Select any option *other* than "Program
+Database for Edit and Continue".)
 
 (The header file is MIT-licensed, so you can use it in anything you like
-without restriction. If you do find something the MIT licence doesn\'t
-permit you to do, [mail me](mailto:anakin@pobox.com), and I\'ll probably
+without restriction. If you do find something the MIT licence doesn't
+permit you to do, [mail me](mailto:anakin@pobox.com), and I'll probably
 give you explicit permission to do it anyway.)
 
 [Follow this link](coroutine.h) for `coroutine.h`.
 
-Thanks for reading. Share and enjoy! []{#references}
+Thanks for reading. Share and enjoy! <span id="references"></span>
 
 ## References
 
 - Donald Knuth, The Art of Computer Programming, Volume 1.
   Addison-Wesley, ISBN 0-201-89683-4. Section 1.4.2 describes coroutines
-  in the \"pure\" form.
-- <http://www.lysator.liu.se/c/duffs-device.html> is Tom Duff\'s own
-  discussion of Duff\'s device. Note, right at the bottom, a hint that
+  in the "pure" form.
+- <http://www.lysator.liu.se/c/duffs-device.html> is Tom Duff's own
+  discussion of Duff's device. Note, right at the bottom, a hint that
   Duff might also have independently invented this coroutine trick or
   something very like it.
   **Update, 2005-03-07**: [Tom Duff confirms
   this](http://brainwagon.org/2005/03/05/coroutines-in-c/#comment-1878)
-  in a blog comment. The \"revolting way to use switches to implement
-  interrupt driven state machines\" of which he speaks in his original
+  in a blog comment. The "revolting way to use switches to implement
+  interrupt driven state machines" of which he speaks in his original
   email is indeed the same trick as I describe here.
 - [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) is a
   Win32 Telnet and SSH client. The SSH protocol code contains real-life
